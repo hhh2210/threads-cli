@@ -35,7 +35,7 @@ test('DOM extractor is executable and does not touch credentials', () => {
   const document = {body:{innerText:'CS2'},querySelectorAll:selector=>selector.startsWith('script')?[script]:[svg]};
   Object.defineProperty(document,'cookie',{get(){throw new Error('Credential read forbidden');}});
   const fn = vm.runInNewContext('('+extractPageScript+')',{document});
-  const result = fn({kind:'search'});
+  const result = JSON.parse(fn({kind:'search'}));
   assert.equal(result.authenticated,true);
   assert.equal(result.viewer,'larryhaoai');
   assert.equal(result.data_roots.length,1);
@@ -44,12 +44,12 @@ test('DOM extractor is executable and does not touch credentials', () => {
 test('login wall is not a successful empty search', () => {
   const document={body:{innerText:'Log in or sign up for Threads'},querySelectorAll:()=>[]};
   const fn=vm.runInNewContext('('+extractPageScript+')',{document});
-  const result=fn({kind:'search'});
+  const result=JSON.parse(fn({kind:'search'}));
   assert.equal(result.authenticated,false);
   assert.equal(result.login_visible,true);
 });
 test('write commands are rejected before browser access', async () => {
-  await assert.rejects(runBrowserCli({},['post','hello']),/allowlisted/);
+  await assert.rejects(runBrowserCli({},['like','hello']),/allowlisted/);
 });
 test('unrelated origins are not collected', async () => {
   await assert.rejects(runBrowserCli({url:async()=> 'https://example.com'},['search','cs2']),/Threads tab/);
@@ -61,8 +61,8 @@ test('browser content crosses the real CLI pipe and persists without session dat
   const calls=[];
   const cdp={send:async(method)=>{calls.push(method);return {};},readEvents:async()=>({cursor:1,events:[],hasMore:false,truncated:false})};
   const tab={url:async()=>current,goto:async(url)=>{current=url;},reload:async()=>{},
-    capabilities:{get:async()=>cdp},playwright:{evaluate:async()=>({data_roots:[sanitizeData(data(),'search')],
-      authenticated:true,viewer:'larryhaoai',ready:true,login_visible:false})}};
+    capabilities:{get:async()=>cdp},playwright:{evaluate:async(fn)=>{assert.equal(typeof fn,'function');return JSON.stringify({data_roots:[sanitizeData(data(),'search')],
+      authenticated:true,viewer:'larryhaoai',ready:true,login_visible:false});}}};
   try {
     const result=await runBrowserCli(tab,['search','cs2','--pages','1'],{
       executable:process.env.THREADS_TEST_EXECUTABLE ?? fileURLToPath(new URL('../.venv/bin/threads',import.meta.url)),dataDir:directory,viewer:'larryhaoai'});
@@ -70,7 +70,7 @@ test('browser content crosses the real CLI pipe and persists without session dat
     assert.equal(result.posts[0].text,'CS2 完美C+ 找队友');
     assert.equal(result.auth_mode,'browser');
     assert.equal(result.completion,'page_limit_reached');
-    assert.deepEqual(calls,['Network.enable']);
+    assert.deepEqual(calls,[]); // First-page collection does not need CDP observation.
     const database=await readFile(join(directory,'evidence.sqlite3'));
     assert(!database.includes(Buffer.from('not-exported')));
   } finally { await rm(directory,{recursive:true,force:true}); }

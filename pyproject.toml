@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "larry-threads-cli"
 version = "0.1.0"
-description = "Read-only Threads search, evidence collection and local filtering with an optional existing browser session"
+description = "Threads search, account inboxes and browser-backed text publishing"
 requires-python = ">=3.12"
 readme = "README.md"
 license = "MIT"

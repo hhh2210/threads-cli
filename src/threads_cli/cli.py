@@ -1,4 +1,4 @@
-"""Command line entry point. No command mutates Threads content."""
+"""Threads collection and explicit browser-backed public replies."""
 
 import json
 import sys
@@ -13,10 +13,14 @@ from rich.markup import escape
 from rich.table import Table
 
 from . import __version__
+from .bridge import BrowserBridge
 from .client import Client
+from .dm import request_dm
 from .errors import ThreadsError
 from .filters import classify_cs2, local_match, since_value
 from .models import Post, now_iso
+from .rate import RateGate
+from .reply import send_post, send_reply
 from .store import Store
 from .urls import post_url, profile_url
 
@@ -110,12 +114,15 @@ def collect_read(client: Client, store: Store, value: str):
 
 
 def classify_all(
-    store: Store, days: int, include_review=False, include_excluded=False, run_id=None
+    store: Store, days: int, include_review=False, include_excluded=False, run_id=None, gender=None
 ) -> tuple[list[dict], dict]:
     posts = store.all_posts(run_id)
     context = store.all_posts()
     annotations = store.annotations()
-    assessed = [classify_cs2(p, context, annotations.get(p["username"]), days=days) for p in posts]
+    assessed = [
+        classify_cs2(p, context, annotations.get(p["username"]), days=days, desired_gender=gender)
+        for p in posts
+    ]
     counts = dict(Counter(p["assessment"]["status"] for p in assessed))
     allowed = {"match"}
     if include_review:
@@ -144,7 +151,7 @@ def classify_all(
 @click.version_option(__version__)
 @click.pass_context
 def cli(ctx, data_dir, auth_mode, viewer):
-    """Read public Threads pages, then filter and retain evidence locally."""
+    """Search Threads, read account activity, and explicitly publish text posts/replies."""
     store = Store(data_dir)
     ctx.call_on_close(store.close)
     config = store.directory / "config.toml"
@@ -153,7 +160,12 @@ def cli(ctx, data_dir, auth_mode, viewer):
     if viewer:
         profile_url(viewer)
         viewer = viewer.removeprefix("@")
-    ctx.obj = {"store": store, "auth_mode": auth_mode, "viewer": viewer}
+    ctx.obj = {
+        "store": store,
+        "auth_mode": auth_mode,
+        "viewer": viewer,
+        "cs2_gender": settings.get("cs2", {}).get("gender"),
+    }
 
 
 @cli.command()
@@ -170,7 +182,9 @@ def doctor(obj, live, json_output):
         "auth_mode": obj["auth_mode"],
         "tracking_viewer": obj["viewer"],
         "data_dir": str(obj["store"].directory),
-        "read_only": True,
+        "read_only": False,
+        "write_commands": ["reply --send", "post --send", "dm send --send", "dm unsend"],
+        "cs2_criteria": {"gender": obj["cs2_gender"], "max_rank": "B", "region": "mainland"},
         "browser_transport": "existing Dia page; no credential export",
         "helper_path": str(Path(__file__).with_name("browser_bridge.mjs")),
         "browser_runtime_candidates": [
@@ -328,7 +342,7 @@ def scan(obj, preset, queries, pages, limit, days, enrich, json_output):
             if result.errors:
                 errors.extend(result.errors)
                 break
-        candidates, _ = classify_all(store, days, include_review=True)
+        candidates, _ = classify_all(store, days, include_review=True, gender=obj["cs2_gender"])
         enriched = []
         if not errors:
             for candidate in candidates[:enrich]:
@@ -349,12 +363,12 @@ def scan(obj, preset, queries, pages, limit, days, enrich, json_output):
                     errors.append(exc.as_dict())
                     break
         requests_count = client.request_count
-    candidates, counts = classify_all(store, days, include_review=True)
+    candidates, counts = classify_all(store, days, include_review=True, gender=obj["cs2_gender"])
     output(
         {
             "ok": not errors,
             "preset": preset,
-            "my_rank": "C+",
+            "my_rank": "金C+",
             "days": days,
             "queries": query_results,
             "enriched": enriched,
@@ -380,18 +394,126 @@ def scan(obj, preset, queries, pages, limit, days, enrich, json_output):
 @click.pass_obj
 def candidates(obj, days, include_review, include_excluded, run_id, json_output):
     """Rank cached evidence without network or account access. One result per person."""
-    rows, counts = classify_all(obj["store"], days, include_review, include_excluded, run_id)
+    rows, counts = classify_all(
+        obj["store"], days, include_review, include_excluded, run_id, gender=obj["cs2_gender"]
+    )
     output(
         {
             "ok": True,
             "source": "local_cache",
             "evaluated_at": now_iso(),
-            "my_rank": "C+",
+            "my_rank": "金C+",
             "counts": counts,
             "candidates": rows,
         },
         json_output,
     )
+
+
+@cli.command()
+@click.argument("target")
+@click.option("--text-file", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--send", is_flag=True, help="Publish once; omitted means preview only.")
+@json_option
+@click.pass_obj
+def reply(obj, target, text_file, send, json_output):
+    """Reply to a post and verify the published author, text and permalink."""
+    text = text_file.read_text(encoding="utf-8").rstrip("\n")
+    output(
+        send_reply(obj["store"], obj["viewer"], target, text, obj["auth_mode"], send), json_output
+    )
+
+
+@cli.command()
+@click.option("--text-file", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--send", is_flag=True, help="Publish once; default is a local preview.")
+@click.option(
+    "--check-composer", is_flag=True, help="Fill, verify and clear a browser draft; no post."
+)
+@json_option
+@click.pass_obj
+def post(obj, text_file, send, check_composer, json_output):
+    """Create a standalone text post, with preview and browser draft verification."""
+    text = text_file.read_text(encoding="utf-8").rstrip("\n")
+    output(
+        send_post(obj["store"], obj["viewer"], text, obj["auth_mode"], send, check_composer),
+        json_output,
+    )
+
+
+def collect_notifications(obj, kind, limit):
+    if obj["auth_mode"] != "browser" or not obj["viewer"]:
+        raise ThreadsError("browser_connection_required", "Inbox needs a browser and --viewer.", 4)
+    with RateGate(obj["store"].directory) as gate:
+        gate.wait()
+        result = BrowserBridge().exchange(
+            "notifications", kind=kind, limit=limit, viewer=obj["viewer"]
+        )["result"]
+    if result.get("viewer") != obj["viewer"]:
+        raise ThreadsError("account_mismatch", "Inbox account did not match.", 4)
+    return result
+
+
+@cli.command()
+@click.option(
+    "--kind",
+    type=click.Choice(["all", "reply", "like", "follow", "repost", "quote", "mention"]),
+    default="all",
+)
+@click.option("--limit", type=click.IntRange(1, 100), default=50)
+@json_option
+@click.pass_obj
+def notifications(obj, kind, limit, json_output):
+    """Read the account's returned notification window, optionally filtered by type."""
+    output(collect_notifications(obj, kind, limit), json_output)
+
+
+@cli.command()
+@click.option("--limit", type=click.IntRange(1, 100), default=50)
+@json_option
+@click.pass_obj
+def inbox(obj, limit, json_output):
+    """Read incoming public reply notifications (not your authored replies or DMs)."""
+    output(collect_notifications(obj, "reply", limit), json_output)
+
+
+@cli.group()
+@click.pass_obj
+def dm(obj):
+    """Read/send in an existing direct conversation, or unsend a verified CLI message."""
+    if obj["auth_mode"] != "browser":
+        raise ThreadsError("browser_connection_required", "DM requires the existing browser.", 4)
+
+
+@dm.command("read")
+@click.argument("thread_id")
+@json_option
+@click.pass_obj
+def dm_read(obj, thread_id, json_output):
+    output(request_dm(obj["store"], obj["viewer"], thread_id), json_output)
+
+
+@dm.command("send")
+@click.argument("thread_id")
+@click.option("--to", "recipient", required=True)
+@click.option("--text-file", type=click.Path(exists=True, path_type=Path), required=True)
+@click.option("--send", "publish", is_flag=True, help="Submit once; otherwise preview only.")
+@json_option
+@click.pass_obj
+def dm_send(obj, thread_id, recipient, text_file, publish, json_output):
+    text = text_file.read_text(encoding="utf-8").rstrip("\n")
+    output(
+        request_dm(obj["store"], obj["viewer"], thread_id, recipient, text, publish), json_output
+    )
+
+
+@dm.command("unsend")
+@click.argument("thread_id")
+@click.option("--message-id", required=True)
+@json_option
+@click.pass_obj
+def dm_unsend(obj, thread_id, message_id, json_output):
+    output(request_dm(obj["store"], obj["viewer"], thread_id, message_id=message_id), json_output)
 
 
 @cli.command("mark-contacted")
@@ -422,18 +544,29 @@ def mark_contacted(obj, username, contacted_at, evidence_url, json_output):
 @click.option(
     "--region",
     type=click.Choice(["mainland_verified", "outside_mainland_verified", "unknown"]),
-    required=True,
+    default=None,
 )
-@click.option("--evidence-url", required=True)
+@click.option("--evidence-url")
+@click.option("--gender", type=click.Choice(["female", "male", "unknown"]))
+@click.option("--gender-evidence-url")
 @click.option("--note", default="")
 @json_option
 @click.pass_obj
-def annotate(obj, username, region, evidence_url, note, json_output):
+def annotate(obj, username, region, evidence_url, gender, gender_evidence_url, note, json_output):
     """Save a source-backed geographic assessment locally; never infer it from script."""
     profile_url(username)
-    obj["store"].annotate(
-        username.removeprefix("@"), region=region, evidence_url=evidence_url, note=note
-    )
+    fields = {"note": note}
+    if region:
+        if not evidence_url:
+            raise click.UsageError("--region requires --evidence-url")
+        fields.update(region=region, evidence_url=evidence_url)
+    if gender:
+        if not gender_evidence_url:
+            raise click.UsageError("--gender requires --gender-evidence-url")
+        fields.update(gender=gender, gender_evidence_url=gender_evidence_url)
+    if not region and not gender:
+        raise click.UsageError("Specify --region or --gender with a source URL")
+    obj["store"].annotate(username.removeprefix("@"), **fields)
     output({"ok": True, "username": username, "local_only": True}, json_output)
 
 

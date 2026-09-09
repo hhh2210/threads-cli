@@ -1,65 +1,69 @@
+import { readDM, sendDM, unsendDM } from './browser_dm.mjs';
+import { publishPost } from './browser_post.mjs';
+import { readNotifications } from './browser_notifications.mjs';
+import { publishReply } from './browser_reply.mjs';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const commands = new Set(['status', 'doctor', 'search', 'read', 'user', 'scan']);
+const commands = new Set(['status', 'doctor', 'search', 'read', 'user', 'scan', 'reply', 'post', 'notifications', 'inbox', 'dm']);
 const eventMethods = ['Network.requestWillBeSent', 'Network.responseReceived', 'Network.loadingFinished'];
 
 // Keep this function self-contained: the same whitelist runs in the browser's
 // read-only DOM scope and on observed pagination responses in Node.
-export function sanitizeData(data, kind) {
-  function post(p) {
-    if (!p?.code || !p.user?.username) return null;
-    const info = p.text_post_app_info || {};
-    return {
-      code: p.code, pk: p.pk || p.id,
-      user: { username: p.user.username, full_name: p.user.full_name },
-      caption: { text: p.caption?.text ?? (info.text_fragments?.fragments || []).map(f => f.plaintext || '').join('') }, taken_at: p.taken_at,
-      like_count: p.like_count, detected_language: p.detected_language,
-      accessibility_caption: p.accessibility_caption,
-      carousel_media: (p.carousel_media || []).map(m => ({ accessibility_caption: m.accessibility_caption })),
-      text_post_app_info: {
-        is_reply: info.is_reply, is_post_unavailable: info.is_post_unavailable,
-        direct_reply_count: info.direct_reply_count, repost_count: info.repost_count,
-        has_viewer_replied: info.has_viewer_replied,
-        share_info: { quoted_post: { code: info.share_info?.quoted_post?.code } },
-      },
-    };
+export function extractPage({ kind, data, normalizeOnly = false }) {
+  function sanitizeData(data, kind) {
+    function post(p) {
+      if (!p?.code || !p.user?.username) return null;
+      const info = p.text_post_app_info || {};
+      return {
+        code: p.code, pk: p.pk || p.id,
+        user: { username: p.user.username, full_name: p.user.full_name },
+        caption: { text: p.caption?.text ?? (info.text_fragments?.fragments || []).map(f => f.plaintext || '').join('') }, taken_at: p.taken_at,
+        like_count: p.like_count, detected_language: p.detected_language,
+        accessibility_caption: p.accessibility_caption,
+        carousel_media: (p.carousel_media || []).map(m => ({ accessibility_caption: m.accessibility_caption })),
+        text_post_app_info: {
+          is_reply: info.is_reply, is_post_unavailable: info.is_post_unavailable,
+          direct_reply_count: info.direct_reply_count, repost_count: info.repost_count,
+          has_viewer_replied: info.has_viewer_replied,
+          share_info: { quoted_post: { code: info.share_info?.quoted_post?.code } },
+        },
+      };
+    }
+    function connection(c, search) {
+      if (!Array.isArray(c?.edges) || !c.page_info) return null;
+      return {
+        edges: c.edges.map(e => {
+          const t = search ? e.node?.thread : e.node;
+          const items = (t?.thread_items || []).map(i => ({ post: post(i.post) })).filter(i => i.post);
+          return search ? { node: { thread: { thread_items: items } } } : { node: { thread_items: items } };
+        }),
+        page_info: { has_next_page: c.page_info.has_next_page, end_cursor: c.page_info.end_cursor },
+      };
+    }
+    if (kind === 'search') {
+      const c = connection(data?.searchResults, true);
+      return c ? { searchResults: c } : null;
+    }
+    if (kind === 'profile') {
+      const u = data?.user;
+      return u?.username ? { user: {
+        username: u.username, full_name: u.full_name, biography: u.biography,
+        is_verified: u.is_verified, follower_count: u.follower_count,
+      } } : null;
+    }
+    if (kind === 'post') {
+      const result = {};
+      if (data?.media) { const p = post(data.media); if (p) result.media = p; }
+      const c = connection(data?.data, false) || connection(data, false);
+      if (c) result.data = c;
+      return Object.keys(result).length ? result : null;
+    }
+    return {};
   }
-  function connection(c, search) {
-    if (!Array.isArray(c?.edges) || !c.page_info) return null;
-    return {
-      edges: c.edges.map(e => {
-        const t = search ? e.node?.thread : e.node;
-        const items = (t?.thread_items || []).map(i => ({ post: post(i.post) })).filter(i => i.post);
-        return search ? { node: { thread: { thread_items: items } } } : { node: { thread_items: items } };
-      }),
-      page_info: { has_next_page: c.page_info.has_next_page, end_cursor: c.page_info.end_cursor },
-    };
-  }
-  if (kind === 'search') {
-    const c = connection(data?.searchResults, true);
-    return c ? { searchResults: c } : null;
-  }
-  if (kind === 'profile') {
-    const u = data?.user;
-    return u?.username ? { user: {
-      username: u.username, full_name: u.full_name, biography: u.biography,
-      is_verified: u.is_verified, follower_count: u.follower_count,
-    } } : null;
-  }
-  if (kind === 'post') {
-    const result = {};
-    if (data?.media) { const p = post(data.media); if (p) result.media = p; }
-    const c = connection(data?.data, false) || connection(data, false);
-    if (c) result.data = c;
-    return Object.keys(result).length ? result : null;
-  }
-  return {};
-}
-
-export const extractPageScript = String.raw`({kind}) => {
-  const sanitize = (${sanitizeData.toString()});
+  if (normalizeOnly) return sanitizeData(data, kind);
+  const sanitize = sanitizeData;
   const roots = [];
   let authenticated = false;
   let upstreamError = false;
@@ -88,8 +92,14 @@ export const extractPageScript = String.raw`({kind}) => {
   const hasReplies = roots.some(r => r.data?.edges);
   const root = roots.find(r => r.media)?.media;
   const ready = kind === 'status' ? authenticated : roots.length > 0 && (kind !== 'post' || hasReplies || root?.text_post_app_info?.direct_reply_count === 0);
-  return {data_roots: roots, authenticated, viewer, login_visible: loginVisible, ready, upstream_error: upstreamError};
-}`;
+  return JSON.stringify({data_roots: roots, authenticated, viewer, login_visible: loginVisible, ready, upstream_error: upstreamError});
+}
+
+export function sanitizeData(data, kind) {
+  return extractPage({data, kind, normalizeOnly: true});
+}
+
+export const extractPageScript = extractPage.toString();
 
 class BrowserFailure extends Error {
   constructor(code, message) { super(message); this.code = code; }
@@ -108,7 +118,7 @@ class BrowserCollector {
       throw new BrowserFailure('browser_error', 'Only canonical Threads pages can be collected.');
     }
     this.requests.clear(); this.pages = [];
-    this.cursor = (await this.cdp.readEvents({ methods: eventMethods })).cursor;
+    if (this.cdp) this.cursor = (await this.cdp.readEvents({ methods: eventMethods })).cursor;
     if (await this.tab.url() === req.url) await this.tab.reload();
     else await this.tab.goto(req.url);
     const deadline = Date.now() + 25000;
@@ -117,7 +127,8 @@ class BrowserCollector {
       if (!['www.threads.com', 'threads.com'].includes(new URL(await this.tab.url()).hostname)) {
         throw new BrowserFailure('auth_required', 'Threads redirected to login; complete it in Dia.');
       }
-      page = await this.tab.playwright.evaluate(extractPageScript, { kind: req.kind });
+      // Serialize in the page to preserve nested replies across the runtime's depth limit.
+      page = JSON.parse(await this.tab.playwright.evaluate(extractPage, { kind: req.kind }));
       if (page.login_visible) throw new BrowserFailure('auth_required', 'Complete Threads login in Dia.');
       if (page.upstream_error) throw new BrowserFailure('browser_error', 'Threads returned an error in the requested page data.');
       if (page.authenticated && page.ready) {
@@ -187,6 +198,16 @@ class BrowserCollector {
     throw new BrowserFailure('pagination_unavailable', 'No matching next page arrived; saved results are partial.');
   }
   async request(req) {
+    if (['dm_read','dm_send','dm_unsend'].includes(req.action)) {
+      const fn={dm_read:readDM,dm_send:sendDM,dm_unsend:unsendDM}[req.action];
+      return fn(this.tab,req,page=>this.page(page),(code,message)=>new BrowserFailure(code,message));
+    }
+    if (req.action === 'notifications') return readNotifications(this.tab, req, page => this.page(page),
+      (code, message) => new BrowserFailure(code, message));
+    if (req.action === 'post') return publishPost(this.tab, req, page => this.page(page),
+      (code, message) => new BrowserFailure(code, message));
+    if (req.action === 'reply') return publishReply(this.tab, req, page => this.page(page),
+      (code, message) => new BrowserFailure(code, message));
     if (req.action === 'page') return this.page(req);
     if (req.action === 'next_search') return this.next(req);
     throw new BrowserFailure('browser_error', 'Unknown browser collection action.');
@@ -196,14 +217,16 @@ class BrowserCollector {
 /** Existing authorized browser only; no cookies, tokens, keychain, or external HTTP replay. */
 export async function runBrowserCli(tab, args, options = {}) {
   if (!Array.isArray(args) || !commands.has(args[0]) || args.some(a => typeof a !== 'string')) {
-    throw new Error('Expected an allowlisted read command and string arguments.');
+    throw new Error('Expected an allowlisted command and string arguments.');
   }
   const url = new URL(await tab.url());
   if (url.protocol !== 'https:' || !['www.threads.com', 'threads.com'].includes(url.hostname)) {
     throw new Error('Select a Threads tab in the existing Dia connection.');
   }
   const collector = new BrowserCollector(tab);
-  await collector.init();
+  // Only search pagination needs network observation. Other commands use DOM reads.
+  const singlePage = args[0] === 'search' && args[args.indexOf('--pages') + 1] === '1';
+  if (['search', 'scan'].includes(args[0]) && !singlePage) await collector.init();
   const prefix = ['--auth', 'browser'];
   if (options.dataDir) prefix.push('--data-dir', options.dataDir);
   if (options.viewer) prefix.push('--viewer', options.viewer);
@@ -212,7 +235,9 @@ export async function runBrowserCli(tab, args, options = {}) {
   const executable = options.executable ?? join(homedir(), '.local', 'bin', 'threads');
   return await new Promise((resolve, reject) => {
     const child = spawn(executable, cliArgs, { shell: false, stdio: ['pipe', 'pipe', 'ignore'],
-      env: { ...process.env, THREADS_BROWSER_BRIDGE: '1' } });
+      // The trusted REPL does not expose process. The executable is absolute;
+      // the CLI only needs its bridge marker, not the host's ambient secrets.
+      env: { THREADS_BROWSER_BRIDGE: '1' } });
     let buffer = ''; let finalText = ''; let queue = Promise.resolve(); let bytes = 0; let closed = false;
     const timeout = setTimeout(() => child.kill('SIGTERM'), options.timeoutMs ?? 240000);
     child.stdout.setEncoding('utf8');
@@ -231,7 +256,7 @@ export async function runBrowserCli(tab, args, options = {}) {
         queue = queue.then(async () => {
           if (closed) return;
           let reply;
-          try { reply = { id: request.id, page: await collector.request(request) }; }
+          try { reply = { id: request.id, [['reply','post','notifications','dm_read','dm_send','dm_unsend'].includes(request.action) ? 'result' : 'page']: await collector.request(request) }; }
           catch (error) { reply = { id: request.id, error: { code: error instanceof BrowserFailure ? error.code : 'browser_error', message: error instanceof BrowserFailure ? error.message : 'Browser collection failed; inspect the page before retrying.' } }; }
           if (!closed) child.stdin.write(JSON.stringify(reply) + '\n');
         });

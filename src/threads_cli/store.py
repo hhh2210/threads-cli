@@ -46,6 +46,10 @@ class Store:
             row[1] for row in self.db.execute("PRAGMA table_info(annotations)")
         }:
             self.db.execute("ALTER TABLE annotations ADD COLUMN contact_evidence_url TEXT")
+        columns = {row[1] for row in self.db.execute("PRAGMA table_info(annotations)")}
+        for column in ("gender", "gender_evidence_url"):
+            if column not in columns:
+                self.db.execute(f"ALTER TABLE annotations ADD COLUMN {column} TEXT")
         self.db.commit()
 
     def close(self):
@@ -112,7 +116,15 @@ class Store:
         return {row["username"]: dict(row) for row in self.db.execute("SELECT * FROM annotations")}
 
     def annotate(self, username: str, **fields):
-        valid = {"region", "evidence_url", "note", "contacted_at", "contact_evidence_url"}
+        valid = {
+            "region",
+            "evidence_url",
+            "note",
+            "contacted_at",
+            "contact_evidence_url",
+            "gender",
+            "gender_evidence_url",
+        }
         if set(fields) - valid:
             raise ValueError("Unknown annotation field")
         self.db.execute("INSERT OR IGNORE INTO annotations(username) VALUES(?)", (username,))

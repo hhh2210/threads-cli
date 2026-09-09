@@ -27,6 +27,29 @@ def test_simplified_is_not_proof_of_mainland():
     assert p["writing_system"] == "simplified"
 
 
+def test_gold_c_plus_accepts_b_but_excludes_b_plus_and_above():
+    for rank in ("B-", "B", "黄金C+", "金色C+"):
+        result = classify_cs2(post(f"本人大陆 CS2 完美{rank} 找队友"), now=NOW)["assessment"]
+        assert result["status"] == "match"
+        assert result["my_rank"] == "金C+"
+    for rank in ("B+", "金B+", "A-", "A+", "金A", "S", "金S"):
+        result = classify_cs2(post(f"CS2 完美{rank} 找队友"), now=NOW)["assessment"]
+        assert "rank_too_high" in result["reasons"]
+
+
+def test_short_reply_keeps_topic_without_inheriting_personal_attributes():
+    parent = post("本人大陆 CS2 完美A+ 5e都有号 找队友")
+    reply = post("B来", username="bob", code="REPLY12", root_code="ROOT123", is_reply=True)
+    result = classify_cs2(reply, [parent], now=NOW)["assessment"]
+    assert result["status"] == "review"
+    assert result["game_matches"] and result["recruitment_intent"]
+    assert result["rank"] is None
+    assert result["region"] == "unknown"
+    assert result["platform"] == "unknown"
+    unrelated = post("旅游找队友")
+    assert classify_cs2(reply, [unrelated], now=NOW)["assessment"]["status"] == "exclude"
+
+
 def test_explicit_platform_rank_region_and_intent_can_match():
     p = classify_cs2(post("本人大陆玩家，CS2 完美C+ 找搭子，只玩完美"), now=NOW)["assessment"]
     assert p["status"] == "match"
@@ -92,3 +115,21 @@ def test_region_self_report_conflict_and_commercial_posts():
     assert "outside_mainland" in p["reasons"]
     p = classify_cs2(post("CS2完美C+找搭子，陪玩接单"), now=NOW)["assessment"]
     assert "commercial_or_group_recruitment" in p["reasons"]
+
+
+def test_female_filter_requires_sourced_identity_not_avatar_or_word_brother():
+    original = post("本人大陆 CS2 完美C+ 找队友，兄弟来")
+    a = classify_cs2(original, desired_gender="female", now=NOW)["assessment"]
+    assert a["gender"] == "unknown" and "gender_unverified" in a["reasons"]
+    a = classify_cs2(original, annotation={"gender": "female"}, desired_gender="female", now=NOW)[
+        "assessment"
+    ]
+    assert a["status"] == "review"
+    for gender, status in (("female", "match"), ("male", "exclude")):
+        a = classify_cs2(
+            original,
+            annotation={"gender": gender, "gender_evidence_url": original["url"]},
+            desired_gender="female",
+            now=NOW,
+        )["assessment"]
+        assert a["status"] == status

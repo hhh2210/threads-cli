@@ -7,7 +7,7 @@ from functools import lru_cache
 from opencc import OpenCC
 
 GAME = re.compile(r"(?<![A-Za-z0-9])cs(?:\s*:?\s*go|2)?(?![A-Za-z0-9+])|反恐精英", re.I)
-RANK = re.compile(r"完美(?:平台)?\s*(金)?\s*([SABCDEF][+-]?)(?![a-z+])", re.I)
+RANK = re.compile(r"完美(?:平台)?\s*(黄金|金色|金)?\s*([SABCDEF][+-]?)(?![a-z+])", re.I)
 TEAM = re.compile(
     r"搭子|队友|固[排玩]|[找缺来].{0,8}[人友]|一起.{0,8}[打玩]|[打玩].{0,8}一起|有[无没有人].{0,8}[打玩]|[234][=＝缺]"
 )
@@ -72,8 +72,9 @@ def classify_cs2(
     context: list[dict] = (),
     annotation: dict | None = None,
     days: int = 14,
-    my_rank: str = "C+",
+    my_rank: str = "金C+",
     now: datetime | None = None,
+    desired_gender: str | None = None,
 ) -> dict:
     now = now or datetime.now(UTC)
     annotation = annotation or {}
@@ -81,8 +82,22 @@ def classify_cs2(
     rank_match = RANK.search(text)
     is_game = bool(GAME.search(text) or rank_match)
     platform = "perfect" if "完美" in text and is_game else "unknown"
-    rank = ((rank_match[1] or "") + rank_match[2].upper()) if rank_match else None
+    rank = (("金" if rank_match[1] else "") + rank_match[2].upper()) if rank_match else None
     intent = bool(TEAM.search(text))
+    # Short replies inherit only the recruitment topic, never the parent's
+    # personal rank or region. Mixed-platform threads leave platform unknown.
+    parent = next((p for p in context if p.get("code") == post.get("root_code")), None)
+    if post.get("is_reply") and parent:
+        parent_text = converter().convert(parent.get("text", ""))
+        parent_game = bool(GAME.search(parent_text) or RANK.search(parent_text))
+        if parent_game and TEAM.search(parent_text):
+            is_game = True
+            if re.fullmatch(
+                r"\s*(?:[+＋]{1,3}|\+1|1{2,3}|来|有[！!]?|我打|[BC][+-]?\s*来)\s*", text, re.I
+            ):
+                intent = True
+            if "完美" in text:
+                platform = "perfect"
     # Replies such as '完美B能一起打吗' carry direct recruitment intent too.
     if rank_match and re.search(r"一起|[+＋]{2}|来|有人", text):
         intent = True
@@ -119,7 +134,7 @@ def classify_cs2(
             update_evidence.append({"url": update["url"], "text": update["text"]})
         m = RANK.search(update_text)
         if m:
-            rank = (m[1] or "") + m[2].upper()
+            rank = ("金" if m[1] else "") + m[2].upper()
             update_evidence.append({"url": update["url"], "text": update["text"]})
 
     region = annotation.get("region") or "unknown"
@@ -142,15 +157,20 @@ def classify_cs2(
 
     if rank is None:
         reasons.append("rank_unverified")
-    elif rank in {"C", "C+", "B", "B-"}:
+    elif rank.removeprefix("金") in {"C", "C+", "C-", "B", "B-"}:
         score += 20
-    elif rank in {"B+", "金B", "金B+"}:
-        reasons.append("rank_above_preference")
-        score += 5
-    elif rank.startswith(("A", "S", "金A", "金S")):
+    elif rank.removeprefix("金") == "B+" or rank.startswith(("A", "S", "金A", "金S")):
         exclude.append("rank_too_high")
     else:
         reasons.append("rank_needs_review")
+
+    gender = annotation.get("gender") or "unknown"
+    gender_evidence = annotation.get("gender_evidence_url")
+    if desired_gender:
+        if gender == "unknown" or not gender_evidence:
+            reasons.append("gender_unverified")
+        elif gender != desired_gender:
+            exclude.append("gender_mismatch")
 
     age_days = None
     if post.get("created_at"):
@@ -184,6 +204,9 @@ def classify_cs2(
             "rank": rank,
             "platform": platform,
             "region": region,
+            "gender": gender,
+            "gender_evidence_url": gender_evidence,
+            "desired_gender": desired_gender,
             "region_evidence": region_evidence,
             "writing_system": writing,
             "age_days": round(age_days, 1) if age_days is not None else None,

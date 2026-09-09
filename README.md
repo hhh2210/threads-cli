@@ -1,14 +1,15 @@
 # Threads CLI
 
-Read-only Threads collection and local evidence filtering. Built for Larry's
+Threads collection, account inboxes, and explicit browser-backed publishing. Built for Larry's
 existing Dia browser connection, with a limited anonymous mode for public pages.
 
 The useful part is the second pass: strict local AND/exclusions, timestamps,
 reply counts, author updates, one candidate per person, and an SQLite ledger of
 what was read. Threads' upstream search itself is still fuzzy and incomplete.
 
-Current verification status: automated tests pass. Live acceptance of the final
-browser-native collector is pending restoration of the Threads login session.
+Live verification on 2026-09-08: account status, search pagination, post replies,
+and profiles work through the existing Dia connection. Collapsed replies remain
+outside the guaranteed coverage.
 
 ## Install
 
@@ -48,7 +49,8 @@ const result = await runBrowserCli(tab, [
 nodeRepl.write(result);
 ```
 
-The helper accepts `status`, `doctor`, `search`, `read`, `user`, and `scan`.
+The helper accepts `status`, `doctor`, `search`, `read`, `user`, `scan`, `reply`,
+`post`, `notifications`, `inbox`, and `dm`.
 It navigates the supplied task tab and observes normal browser pagination.
 It creates no browser, extension, background service, public port, or scheduler.
 Never pass a tab containing a draft, login form, or unrelated user work.
@@ -60,7 +62,7 @@ to paste into a shell command.
 
 ## CS2 teammate workflow
 
-The built-in `cs2` preset targets mainland Perfect World, around **C+**, with a
+The built-in `cs2` preset targets mainland Perfect World, **gold C+**, accepting C/B tiers below B+ and excluding B+/A/S, with a
 14-day freshness preference. It reads multiple queries sequentially, deduplicates
 posts, and can enrich the strongest leads with their original threads.
 
@@ -152,5 +154,66 @@ Uses [Click](https://github.com/pallets/click), [Rich](https://github.com/Textua
 The public-page approach was informed by [tamnd/threads-cli](https://github.com/tamnd/threads-cli).
 These projects deserve support; consider starring the ones you find useful.
 
-Unofficial; not affiliated with Meta. No publishing, messaging, following, or
-liking commands are implemented.
+Unofficial; not affiliated with Meta. Text replies, standalone text posts, account notifications, and existing-conversation
+DM commands are implemented. New DM conversations, following and liking are not implemented.
+
+## Send a public reply
+
+`threads reply TARGET --text-file message.txt` previews the exact recipient and
+text locally. `--send` publishes through the same `runBrowserCli` helper used
+for collection. Set the expected account with `--viewer` or the local config.
+
+```js
+await runBrowserCli(tab, ["reply", "https://www.threads.com/@author/post/code",
+  "--text-file", "/absolute/path/message.txt", "--send"]);
+```
+
+The command checks sender and recipient, posts once, then reads the new permalink
+back to verify the author and exact text. A persistent outbox deduplicates an
+identical sender/target/text request. An uncertain attempt requires read-only
+reconciliation; repeating the command will not blindly resend. Public replies
+are visible to others and are not private messages.
+
+## Account activity and standalone posts
+
+```sh
+threads post --text-file /absolute/path/post.txt             # local preview
+threads post --text-file /absolute/path/post.txt --check-composer
+threads post --text-file /absolute/path/post.txt --send
+threads notifications --kind all --limit 50
+threads inbox --limit 50                                    # incoming public replies
+threads dm read 1234567890123456
+threads dm send 1234567890123456 --to test_recipient --text-file /absolute/path/dm.txt --send
+threads dm unsend 1234567890123456 --message-id MESSAGE_ID
+```
+
+Live commands above still require `runBrowserCli(tab, [...])`; these are not
+standalone terminal commands without an attached driver. Preview and cache
+commands work directly in the terminal. Inbox commands return the page's bounded
+notification window with `has_more`/`completion`; they do not claim all-history
+coverage. `inbox` means replies received, not replies authored by the user.
+
+Private message commands currently address an existing numeric conversation ID
+and verify its two participants. They do not create conversations or support
+attachments. Private conversation reads are not copied into the public evidence
+database. The outgoing-DM ledger is local and private.
+
+### Verification on 2026-09-09
+
+- Notifications: 49 records read, reply inbox: 24 reply records, with separate categories.
+- Standalone text post: composer filled, exact text verified, test draft discarded.
+  No standalone public test post was published; final publication still lacks live validation.
+- Public reply: one real invitation was published and read back with its permalink.
+- DM send: one explicitly authorized test to a designated recipient was sent and read back
+  with a server message ID. The test was withdrawn via the page and a reload
+  confirmed both its ID and text absent. CLI unsend encountered rendering/control
+  failures and is experimental, not end-to-end verified.
+- 42 Python tests and 14 Node tests pass, plus Ruff and diff whitespace checks.
+
+### Updated CS2 preferences
+
+`[cs2] gender = "female"` in the local config enables source-backed female-only
+matching. B+ and above are excluded. `annotate --gender female
+--gender-evidence-url URL` requires genuine self-identification evidence; a name,
+avatar, or the word “brother” cannot supply it. Mainland location still needs
+its own evidence. Unknown criteria stay in `review`.

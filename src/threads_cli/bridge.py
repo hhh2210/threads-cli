@@ -22,7 +22,7 @@ class BrowserBridge:
                 4,
             )
 
-    def request(self, action: str, **params):
+    def exchange(self, action: str, **params):
         request_id = uuid.uuid4().hex[:12]
         sys.stdout.write(
             json.dumps({"bridge_request": {"id": request_id, "action": action, **params}}) + "\n"
@@ -44,6 +44,10 @@ class BrowserBridge:
                     "pagination_unavailable",
                     "browser_error",
                     "rate_limited",
+                    "send_unconfirmed",
+                    "not_submitted",
+                    "account_mismatch",
+                    "already_contacted",
                 }:
                     code = "browser_error"
                 raise ThreadsError(
@@ -51,6 +55,15 @@ class BrowserBridge:
                     reply["error"].get("message", "Browser collection failed."),
                     4 if code in {"auth_required", "verification_required"} else 5,
                 )
+            return reply
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ThreadsError(
+                "browser_error", "Invalid response from the browser bridge.", 5
+            ) from None
+
+    def request(self, action: str, **params):
+        reply = self.exchange(action, **params)
+        try:
             data = reply["page"]
             page = page_from_data(
                 data["data_roots"], params.get("kind", "search"), params.get("root_code")
@@ -59,6 +72,4 @@ class BrowserBridge:
             page.viewer = data.get("viewer")
             return page
         except (ValueError, TypeError, KeyError, AttributeError):
-            raise ThreadsError(
-                "browser_error", "Invalid response from the browser bridge.", 5
-            ) from None
+            raise ThreadsError("browser_error", "Invalid browser page response.", 5) from None
