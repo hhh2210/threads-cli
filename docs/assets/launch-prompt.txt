@@ -1,0 +1,9 @@
+Use case: ads-marketing
+Asset type: open-source GitHub README banner and Twitter/X launch image, landscape 16:9.
+Primary request: Create a polished editorial launch illustration for "threads-cli", an unofficial command-line tool for searching Threads, applying precise local filters and keeping source evidence.
+Scene/backdrop: warm off-white paper with understated grain.
+Subject: a dark elegant terminal panel beside a sculptural ribbon of conversation cards that progressively becomes a tidy ordered stack; a visual metaphor for messy social search becoming useful evidence. Abstract cards have short neutral line marks, no private conversations or portraits.
+Style/medium: tasteful 3D paper-and-ink editorial illustration, restrained charcoal and muted teal, generous whitespace, exceptionally legible typography, crisp finished developer-tool campaign.
+Composition: strong hierarchy, prominent product name and one short subline, visual spanning the lower half, plenty of safe margins for social cropping.
+Text (verbatim): "threads-cli" and "Search. Filter. Keep the evidence."
+Constraints: only these two text strings. No Meta logo, no Threads logo, no metrics, badges or fabricated results. No suggestion of official affiliation. No watermark, neon or generic glowing AI imagery.

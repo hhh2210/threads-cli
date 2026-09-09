@@ -105,4 +105,6 @@ requires real source evidence. Do not use these to manufacture verified matches.
 
 `complete` means the returned connection ended, not all Threads content was
 searched. `read` may omit collapsed/nested replies. State these limits where they
-matter. The CLI has no posting, commenting, messaging, liking, or follow commands.
+matter. This skill covers collection. The CLI also exposes explicit post/reply
+and existing-conversation DM commands; see `docs/reference.md` for their
+verification boundaries. Likes and follows are not implemented.
