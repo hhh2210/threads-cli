@@ -5,7 +5,7 @@
 ## Browser helper
 
 `runBrowserCli(tab, args, options)` accepts `status`, `doctor`, `search`, `read`,
-`user`, `scan`, `reply`, `post`, `notifications`, `inbox`, and `dm`. CLI options
+`user`, `scan`, `reply`, `post`, `notifications`, `inbox`, `dm`, and `hidden-words`. CLI options
 are parsed identically through the helper. Optional helper settings include
 `executable`, `viewer`, and `dataDir`.
 
@@ -126,3 +126,71 @@ These are historical checks in the author's Dia/Codex environment:
 The README/banner image was generated with the built-in `image_gen` tool.
 The exact prompt is saved in [assets/launch-prompt.txt](assets/launch-prompt.txt).
 It is a conceptual illustration, not a screenshot of CLI output.
+
+## Bulk hidden words
+
+`hidden-words` operates on the current **Custom filters** screen at
+`https://www.threads.com/settings/hidden_words/`. It uses ordinary browser
+controls and keeps authentication in the browser. This is separate from local
+search `--exclude` options. The implemented selectors target the English web UI;
+no support is claimed for the legacy mobile list or other web locales.
+
+```sh
+threads hidden-words list
+threads hidden-words list --filter "My filter"
+threads hidden-words add --filter "My filter" --file words.txt
+threads hidden-words add --filter "My filter" --word "one phrase" --word "another"
+threads hidden-words add --filter "My filter" --file words.txt --check
+threads hidden-words add --filter "My filter" --file words.txt --create --apply
+```
+
+Only the default `add` preview is local. `list`, `--check`, and `--apply` require
+`runBrowserCli(tab, [...], {viewer: "your_handle"})`. Global `--viewer` or the
+existing config can supply the expected account. `list` returns filter summaries;
+`list --filter` reads that filter's full words and settings. None are archived in
+the public post evidence database.
+
+Input is UTF-8 text with optional BOM. Newlines, English commas, and Chinese commas
+separate words/phrases; internal spaces are retained. Blank entries are ignored.
+NFC normalization and lowercase comparison remove duplicates while preserving the
+first spelling. This is plain text, not quoted CSV; a comma cannot be part of a
+single phrase. The CLI caps a request at 1 MB and 1000 unique entries. These are
+client safeguards, not claimed platform limits. The actual page may reject a
+smaller request; the command stops rather than silently dropping words.
+
+`--filter` is an exact name. A missing filter fails unless `--create` is supplied;
+duplicate filter names fail rather than selecting an arbitrary one. New filters
+use the page's verified defaults: anyone, enabled until turned off. Existing
+filter description, audience scope, duration, activation state, and words are
+preserved. Creating a new filter never merges the separate legacy mobile list.
+
+Preview states:
+
+- `local_preview`: normalized input only; the remote list was not read.
+- `preview` with `--check`: reads existing words and returns `added`/`skipped`,
+  without saving. `--check` and `--apply` are mutually exclusive.
+- `unchanged`: applying finds all requested words already present; no Save occurs.
+- `verified`: additions were saved and read back after a page reload.
+
+Batches of 50 are added to the same editor draft, followed by one Save. Before
+saving, each batch and the unchanged settings are checked. After saving, a reload
+must show every old word, every requested addition, and unchanged metadata.
+This proves persistence in account settings; it does not guarantee platform-wide
+feed matching or immediate mobile synchronization. Avoid concurrent edits to the
+same filter from another tab/device while importing.
+
+An existing dialog is preserved and reported as `draft_present`. Unknown layouts,
+incomplete word lists, ambiguous names, and account changes fail closed. If Save
+was attempted but verification failed, the result is `save_unconfirmed`; the
+command does not retry Save. Read `list --filter ...` or use `add --check` to
+reconcile the actual saved list before another explicit apply. An interrupted
+browser may leave this operation's draft open; inspect it before restarting.
+
+### Live batch verification — 2026-09-09
+
+In an isolated temporary filter, the CLI imported 54 new words in two editor
+batches, skipped two already-present words and two input duplicates, then read
+back all 56 saved entries. The original two words and the filter's Off state were
+preserved. Repeating the import returned `unchanged`, with zero additions.
+The CLI also created a second test filter containing two words and verified the
+saved defaults and contents. Temporary filters were removed after testing.

@@ -126,6 +126,42 @@ threads --auth public search 'open source' --pages 1 --json
 Anonymous results can omit posts available when logged in. An empty response
 is not proof that no matching posts exist.
 
+## Bulk hidden words
+
+Import a whole word list into Threads' **Custom filters** in Hidden Words. This
+changes your account's actual filter, not just the CLI's local search exclusions.
+The current English web interface is supported; the older mobile-only word-list
+screen and other web languages are unverified.
+
+Put one word or phrase per line in `words.txt`. English/Chinese commas also work;
+spaces inside phrases are preserved. Preview without connecting:
+
+```sh
+threads hidden-words add --filter "My filter" --file words.txt --json
+```
+
+Inspect your filters, check additions against the live list, then apply through
+the existing browser helper (using the expected Threads account):
+
+```js
+const options = { viewer: "your_handle" };
+await runBrowserCli(tab, ["hidden-words", "list"], options);
+await runBrowserCli(tab, ["hidden-words", "add", "--filter", "My filter",
+  "--file", "/absolute/path/words.txt", "--check"], options);
+await runBrowserCli(tab, ["hidden-words", "add", "--filter", "My filter",
+  "--file", "/absolute/path/words.txt", "--apply"], options);
+```
+
+Add `--create` only to allow a missing filter to be created. New filters are
+active for anyone's posts until turned off. Existing filters retain their
+enabled/disabled state, audience scope, duration, description, and old words.
+Duplicate input and already-present words are skipped. Writes use batches of 50
+in the editor, a single Save, then a full reload/read-back check. Repeating an
+already-completed import returns `unchanged`.
+
+See [the detailed reference](docs/reference.md#bulk-hidden-words) for input limits,
+recovery, and the live verification record.
+
 ## Notifications and publishing
 
 Set your expected public handle in `~/.local/share/threads-cli/config.toml`:
@@ -172,6 +208,7 @@ They describe that tested environment, not a compatibility guarantee.
 | Capability | Status |
 | --- | --- |
 | Account status, paginated search, post replies, profiles | Live verified; collapsed replies may be missing |
+| Hidden Words batch import | Live verified: 54 additions, existing-word preservation, repeat import, and filter creation |
 | Notifications and incoming public replies | Live verified; bounded notification window |
 | Public text reply | Published and read back with author, exact text, and permalink |
 | Standalone text post | Composer checked; final publication not yet live verified |
@@ -192,7 +229,7 @@ uv run ruff check .
 node --test tests/*.test.mjs
 ```
 
-The latest local validation passed 42 Python tests, 14 Node tests, and Ruff.
+The latest local validation passed 56 Python tests, 23 Node tests, and Ruff.
 Bug reports are most useful with the command, structured error code, environment,
 and a minimal redacted example. Browser compatibility, collection coverage,
 and reproducible publishing checks are useful areas for contributions.

@@ -118,6 +118,37 @@ threads --auth public search 'open source' --pages 1 --json
 匿名结果可能遗漏登录后才能搜到的帖子，中文组合尤其可能受影响。
 空结果不能证明没有匹配内容。
 
+## 批量添加屏蔽词
+
+将一整份词表导入 Threads「屏蔽词」里的**自定义过滤器**。修改的是账号实际生效的
+设置，不只是 CLI 的本地搜索排除词。目前适配英文网页版的新过滤器界面；
+旧版手机词库界面和其他网页语言尚未验证。
+
+在 `words.txt` 中一行写一个词或短语，也支持英文逗号、中文逗号混合分隔。
+短语内部的空格会保留。先在终端本地预览，不会修改账号：
+
+```sh
+threads hidden-words add --filter "关键词屏蔽" --file words.txt --json
+```
+
+通过已有浏览器连接，查看过滤器、核对哪些词需要追加，再保存：
+
+```js
+const options = { viewer: "your_handle" };
+await runBrowserCli(tab, ["hidden-words", "list"], options);
+await runBrowserCli(tab, ["hidden-words", "add", "--filter", "关键词屏蔽",
+  "--file", "/absolute/path/words.txt", "--check"], options);
+await runBrowserCli(tab, ["hidden-words", "add", "--filter", "关键词屏蔽",
+  "--file", "/absolute/path/words.txt", "--apply"], options);
+```
+
+允许新建不存在的过滤器时，额外加 `--create`。新过滤器默认对所有人的帖子生效，
+直到手动关闭。追加到已有过滤器时，保留其开关、作用范围、期限、描述和旧词。
+重复输入和已有词会跳过。编辑器中每批添加 50 个词，最后只保存一次，
+然后刷新回读完整词表；重复执行已经完成的导入会返回 `unchanged`。
+
+输入限制、异常恢复和实测记录见[命令参考](docs/reference.md#bulk-hidden-words)。
+
 ## 通知和发布
 
 在 `~/.local/share/threads-cli/config.toml` 配置预期的公开用户名：
@@ -163,6 +194,7 @@ await runBrowserCli(tab, ["post", "--text-file", "/absolute/path/post.txt", "--s
 | 能力 | 状态 |
 | --- | --- |
 | 账号状态、分页搜索、帖子回复、个人主页 | 已实测；折叠回复可能缺失 |
+| 批量屏蔽词 | 已实测：追加 54 个词、保留旧词、重复导入去重及新建过滤器 |
 | 通知与收到的公开回复 | 已实测；只覆盖页面返回的有限窗口 |
 | 公开文字回复 | 已发布，并回读核对作者、精确文本和永久链接 |
 | 独立文字发帖 | 已检查编辑器；最终发布尚未在线实测 |
@@ -182,7 +214,7 @@ uv run ruff check .
 node --test tests/*.test.mjs
 ```
 
-最近一次本地验证通过了 42 项 Python 测试、14 项 Node 测试及 Ruff。
+最近一次本地验证通过了 56 项 Python 测试、23 项 Node 测试及 Ruff。
 反馈问题时，请提供命令、结构化错误码、运行环境和脱敏的最小示例。
 欢迎参与浏览器兼容性、采集覆盖范围和可复现的发布验证。
 

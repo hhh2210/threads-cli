@@ -2,11 +2,12 @@ import { readDM, sendDM, unsendDM } from './browser_dm.mjs';
 import { publishPost } from './browser_post.mjs';
 import { readNotifications } from './browser_notifications.mjs';
 import { publishReply } from './browser_reply.mjs';
+import { manageHiddenWords } from './browser_hidden_words.mjs';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const commands = new Set(['status', 'doctor', 'search', 'read', 'user', 'scan', 'reply', 'post', 'notifications', 'inbox', 'dm']);
+const commands = new Set(['status', 'doctor', 'search', 'read', 'user', 'scan', 'reply', 'post', 'notifications', 'inbox', 'dm', 'hidden-words']);
 const eventMethods = ['Network.requestWillBeSent', 'Network.responseReceived', 'Network.loadingFinished'];
 
 // Keep this function self-contained: the same whitelist runs in the browser's
@@ -198,6 +199,8 @@ class BrowserCollector {
     throw new BrowserFailure('pagination_unavailable', 'No matching next page arrived; saved results are partial.');
   }
   async request(req) {
+    if (req.action === 'hidden_words') return manageHiddenWords(this.tab, req,
+      (code, message) => new BrowserFailure(code, message));
     if (['dm_read','dm_send','dm_unsend'].includes(req.action)) {
       const fn={dm_read:readDM,dm_send:sendDM,dm_unsend:unsendDM}[req.action];
       return fn(this.tab,req,page=>this.page(page),(code,message)=>new BrowserFailure(code,message));
@@ -256,7 +259,7 @@ export async function runBrowserCli(tab, args, options = {}) {
         queue = queue.then(async () => {
           if (closed) return;
           let reply;
-          try { reply = { id: request.id, [['reply','post','notifications','dm_read','dm_send','dm_unsend'].includes(request.action) ? 'result' : 'page']: await collector.request(request) }; }
+          try { reply = { id: request.id, [['reply','post','notifications','dm_read','dm_send','dm_unsend','hidden_words'].includes(request.action) ? 'result' : 'page']: await collector.request(request) }; }
           catch (error) { reply = { id: request.id, error: { code: error instanceof BrowserFailure ? error.code : 'browser_error', message: error instanceof BrowserFailure ? error.message : 'Browser collection failed; inspect the page before retrying.' } }; }
           if (!closed) child.stdin.write(JSON.stringify(reply) + '\n');
         });

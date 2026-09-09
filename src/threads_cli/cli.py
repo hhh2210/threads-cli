@@ -18,6 +18,7 @@ from .client import Client
 from .dm import request_dm
 from .errors import ThreadsError
 from .filters import classify_cs2, local_match, since_value
+from .hidden_words import MAX_INPUT_BYTES, manage_hidden_words
 from .models import Post, now_iso
 from .rate import RateGate
 from .reply import send_post, send_reply
@@ -183,7 +184,13 @@ def doctor(obj, live, json_output):
         "tracking_viewer": obj["viewer"],
         "data_dir": str(obj["store"].directory),
         "read_only": False,
-        "write_commands": ["reply --send", "post --send", "dm send --send", "dm unsend"],
+        "write_commands": [
+            "reply --send",
+            "post --send",
+            "dm send --send",
+            "dm unsend",
+            "hidden-words add --apply",
+        ],
         "cs2_criteria": {"gender": obj["cs2_gender"], "max_rank": "B", "region": "mainland"},
         "browser_transport": "existing Dia page; no credential export",
         "helper_path": str(Path(__file__).with_name("browser_bridge.mjs")),
@@ -437,6 +444,72 @@ def post(obj, text_file, send, check_composer, json_output):
     text = text_file.read_text(encoding="utf-8").rstrip("\n")
     output(
         send_post(obj["store"], obj["viewer"], text, obj["auth_mode"], send, check_composer),
+        json_output,
+    )
+
+
+@cli.group("hidden-words")
+def hidden_words():
+    """List custom filters or append words in bulk through the browser."""
+
+
+@hidden_words.command("list")
+@click.option("--filter", "filter_name", help="Exact filter name; include its full word list.")
+@json_option
+@click.pass_obj
+def hidden_words_list(obj, filter_name, json_output):
+    """Read account filters; no preference changes or evidence archive."""
+    output(
+        manage_hidden_words(
+            obj["store"],
+            obj["viewer"],
+            obj["auth_mode"],
+            filter_name=filter_name,
+        ),
+        json_output,
+    )
+
+
+@hidden_words.command("add")
+@click.option("--filter", "filter_name", required=True, help="Exact target filter name.")
+@click.option("--file", "words_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--word", "inline_words", multiple=True, help="Word or phrase; repeatable.")
+@click.option("--create", is_flag=True, help="Create the named filter if missing (active, anyone).")
+@click.option(
+    "--check", is_flag=True, help="Read the live list and preview additions; do not save."
+)
+@click.option(
+    "--apply", is_flag=True, help="Save additions and reload to verify; default is preview."
+)
+@json_option
+@click.pass_obj
+def hidden_words_add(obj, filter_name, words_file, inline_words, create, check, apply, json_output):
+    """Import UTF-8 words separated by commas/newlines, preserving existing words."""
+    text = ""
+    if words_file:
+        try:
+            with words_file.open("rb") as source:
+                raw = source.read(MAX_INPUT_BYTES + 1)
+            if len(raw) > MAX_INPUT_BYTES:
+                raise click.BadParameter("File exceeds the CLI's 1 MB limit.", param_hint="--file")
+            text = raw.decode("utf-8-sig")
+        except (OSError, UnicodeError) as error:
+            raise click.BadParameter(
+                "Cannot read a UTF-8 word file.", param_hint="--file"
+            ) from error
+    text = "\n".join([text, *inline_words])
+    output(
+        manage_hidden_words(
+            obj["store"],
+            obj["viewer"],
+            obj["auth_mode"],
+            operation="add",
+            filter_name=filter_name,
+            text=text,
+            create=create,
+            apply=apply,
+            check=check,
+        ),
         json_output,
     )
 

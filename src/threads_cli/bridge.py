@@ -1,6 +1,6 @@
 """Private, local request/response pipe to the already-connected browser.
 
-Only normalized public content crosses this boundary. No browser credentials.
+Only normalized task data crosses this boundary. No browser credentials.
 """
 
 import json
@@ -48,6 +48,11 @@ class BrowserBridge:
                     "not_submitted",
                     "account_mismatch",
                     "already_contacted",
+                    "filter_not_found",
+                    "ambiguous_filter",
+                    "draft_present",
+                    "verification_failed",
+                    "save_unconfirmed",
                 }:
                     code = "browser_error"
                 raise ThreadsError(
